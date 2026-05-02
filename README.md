@@ -34,8 +34,8 @@ smalomar/se446-project-group-Shh-2/
 │   └── build_notebook.py        # Generates the .ipynb from cell sources
 ├── output/
 │   ├── spark_submit_log.txt     # Task 11 evidence (cluster)
-│   ├── cluster_yarn_log.txt     # Task 10 evidence (cluster, added by haifafr)
-│   └── task3_yearly_trend.png   # Task 3 matplotlib chart (added by haifafr)
+│   ├── cluster_yarn_log.txt     # Task 10 evidence (cluster)
+│   └── task3_yearly_trend.png   # Task 3 matplotlib chart (local)
 └── README.md
 ```
 
@@ -112,6 +112,62 @@ Slight differences come from M1 using a custom `IndexError`-skipping CSV split t
 
 ---
 
+## Task 3 — Crime Trend Over Years (DataFrame + matplotlib)
+**Author:** Haifa Alrayes (231171, `haifafr`)
+
+**Code (notebook):**
+```python
+yearly = df.groupBy("Year").count().orderBy("Year")
+# local: matplotlib line chart; cluster: printed table
+```
+
+**M2 cluster results (yearly counts, full dataset):**
+
+| Year | Count | | Year | Count |
+|---:|---:|---|---:|---:|
+| 2001 | 467,301 | | 2014 | 825 |
+| 2002 | 205,266 | | 2015 | 1,105 |
+| 2003 | 985 | | 2016 | 1,339 |
+| 2004 | 915 | | 2017 | 1,387 |
+| 2005 | 1,031 | | 2018 | 1,327 |
+| 2006 | 796 | | 2019 | 1,174 |
+| 2007 | 762 | | 2020 | 1,832 |
+| 2008 | 1,010 | | 2021 | 2,399 |
+| 2009 | 910 | | 2022 | 4,678 |
+| 2010 | 695 | | 2023 | 81,461 |
+| 2011 | 770 | | 2024 | 880 |
+| 2012 | 800 | | 2025 | 12,710 |
+| 2013 | 714 | | | |
+
+Matches M1 Task 4 exactly (2001 + 2002 dominate, then a long quiet stretch through 2022, sharp 2023 spike). Local chart at `output/task3_yearly_trend.png`.
+
+---
+
+## Task 4 — Arrest Rate Analysis (DataFrame)
+**Author:** Haifa Alrayes (231171, `haifafr`)
+
+**Cluster results — overall:**
+> **Overall arrest rate: 221,932 / 793,073 = 27.98%** (matches M1's 28.1% within rounding)
+
+**Cluster results — top 10 by rate (min 100 cases):**
+
+| Crime Type | Total | Arrest Rate |
+|---|---:|---:|
+| NARCOTICS | 74,127 | 99.88% |
+| PROSTITUTION | 9,100 | 99.88% |
+| LIQUOR LAW VIOLATION | 2,349 | 99.83% |
+| GAMBLING | 1,314 | 99.77% |
+| INTERFERENCE WITH PUBLIC OFFICER | 803 | 80.70% |
+| WEAPONS VIOLATION | 8,893 | 74.60% |
+| CRIMINAL TRESPASS | 21,476 | 73.58% |
+| PUBLIC PEACE VIOLATION | 1,827 | 66.83% |
+| HOMICIDE | 13,173 | 48.11% |
+| SEX OFFENSE | 3,932 | 32.38% |
+
+**Interpretation:** A bimodal split — proactive-policing crimes (NARCOTICS, PROSTITUTION, etc., ~100% arrest because the report only exists when an officer makes a stop) vs reactive-reporting crimes (THEFT 14.2%, BURGLARY 6.7%, MOTOR VEHICLE THEFT 10.8% — most go unsolved). This is exactly the signal Phase B's ML model exploits.
+
+---
+
 # Phase B — Spark MLlib (Arrest Prediction)
 
 ## Task 5 — Feature Engineering Pipeline
@@ -139,7 +195,7 @@ Sample row trace: `Primary Type=NARCOTICS → crime_index=3.0`, vector `[Distric
 
 **Best by AUC: Random Forest (0.8796).**
 
-**Cluster results (full 793K rows, from `cluster_yarn_log.txt` — added by haifafr in next PR):**
+**Cluster results (full 793K rows, from `cluster_yarn_log.txt`):**
 
 | Model | Train (s) | AUC | Accuracy | F1 |
 |:--|---:|---:|---:|---:|
@@ -177,6 +233,57 @@ CV runtime locally: 371.8 s.
 ---
 
 # Phase C — Deployment Evidence
+
+## Task 9 — Local Execution
+**Author:** Haifa Alrayes (231171, `haifafr`)
+
+Notebook executed end-to-end via `jupyter nbconvert --execute` on macOS (Python 3.9, PySpark 3.5.1, Java 17). Cell 3 of `M2_Spark_ML_GroupShh.ipynb` shows:
+
+```
+Spark version: 3.5.1
+Master: local[*]
+```
+
+10,000 rows generated in-memory by the W09B generator. All 8 tasks executed; outputs embedded in the notebook.
+
+## Task 10 — Cluster Execution: Client Mode
+**Author:** Haifa Alrayes (231171, `haifafr`)
+
+```bash
+halrayes@master-node:~$ source /etc/profile.d/hadoop.sh
+halrayes@master-node:~$ source /etc/profile.d/spark.sh
+halrayes@master-node:~$ spark-submit --master yarn --deploy-mode client \
+    --num-executors 2 --executor-memory 768m --executor-cores 1 --driver-memory 1g \
+    m2_full.py
+```
+
+Excerpt from `output/cluster_yarn_log.txt`:
+
+```
+Spark version: 3.5.4
+Master: yarn
+Dataset: 793,072 rows
+Top 10 crime types:
++-------------------+------+
+|Primary Type       |count |
++-------------------+------+
+|THEFT              |162688|
+|BATTERY            |151930|
+|CRIMINAL DAMAGE    |91241 |
+|NARCOTICS          |74127 |
+|ASSAULT            |54070 |
+|MOTOR VEHICLE THEFT|48494 |
+|BURGLARY           |39872 |
+|OTHER OFFENSE      |36893 |
+|ROBBERY            |30991 |
+|DECEPTIVE PRACTICE |30396 |
++-------------------+------+
+Overall arrest rate: 221932 / 793073 = 0.2798 (27.98%)
+LR train time: 33.2s  metrics: {'AUC': 0.6167, 'Accuracy': 0.7249, 'F1': 0.6293, ...}
+RF train time: 156.3s metrics: {'AUC': 0.8101, 'Accuracy': 0.8142, 'F1': 0.7786, ...}
+```
+
+Application ID in YARN history: `application_1771402826595_0342`. Full log: [`output/cluster_yarn_log.txt`](output/cluster_yarn_log.txt).
 
 ## Task 11 — spark-submit
 **Author:** Sarah Alomar (231283, `smalomar`)
