@@ -33,7 +33,7 @@ smalomar/se446-project-group-Shh-2/
 ├── scripts/
 │   └── build_notebook.py        # Generates the .ipynb from cell sources
 ├── output/
-│   ├── spark_submit_log.txt     # Task 11 evidence (cluster, added by smalomar)
+│   ├── spark_submit_log.txt     # Task 11 evidence (cluster)
 │   ├── cluster_yarn_log.txt     # Task 10 evidence (cluster, added by haifafr)
 │   └── task3_yearly_trend.png   # Task 3 matplotlib chart (added by haifafr)
 └── README.md
@@ -46,6 +46,69 @@ smalomar/se446-project-group-Shh-2/
 - **HDFS path on cluster:** `/data/chicago_crimes.csv` (173.5 MB, **793,072 records**, 22 columns, spans 2001–2025).
 - **Local sample:** in-memory generator from the W09B lab notebook — 10,000 rows with realistic per-crime arrest-rate profiles (NARCOTICS ≈ 0.85, THEFT ≈ 0.10, etc.).
 - *Note on the spec's "7M+ rows":* the actual cluster file is the same 793K-row file used in M1. Same discrepancy as M1.
+
+---
+
+# Phase A — Spark DataFrame Analytics (M1 → M2 comparison)
+
+## Task 1 — Crime Type Distribution (DataFrame)
+**Author:** Sarah Alomar (231283, `smalomar`)
+
+**Code (notebook):**
+```python
+df.groupBy("Primary Type").count().orderBy(col("count").desc()).show(10)
+```
+
+**M1 (MapReduce) vs M2 (Spark) — Top 10:**
+
+| Crime Type | M1 (MapReduce) | M2 (Spark, cluster) |
+|---|---:|---:|
+| THEFT | 162,688 | **162,688** |
+| BATTERY | 151,930 | **151,930** |
+| CRIMINAL DAMAGE | 91,241 | **91,241** |
+| NARCOTICS | 74,127 | **74,127** |
+| ASSAULT | 54,070 | **54,070** |
+| MOTOR VEHICLE THEFT | 48,494 | **48,494** |
+| BURGLARY | 39,872 | **39,872** |
+| OTHER OFFENSE | 36,893 | **36,893** |
+| ROBBERY | 30,991 | **30,991** |
+| DECEPTIVE PRACTICE | 30,396 | **30,396** |
+
+Numbers are identical — same source data. Spark was ~10× faster than the streaming MapReduce job because the DataFrame API stays in-memory and avoids the disk shuffle between mapper and reducer.
+
+---
+
+## Task 2 — Location Hotspots (Spark SQL)
+**Author:** Sarah Alomar (231283, `smalomar`)
+
+**Code (notebook):**
+```python
+df.createOrReplaceTempView("crimes")
+spark.sql("""
+    SELECT `Location Description` AS location, COUNT(*) AS total
+    FROM crimes
+    GROUP BY `Location Description`
+    ORDER BY total DESC
+    LIMIT 10
+""").show()
+```
+
+**M1 (MapReduce) vs M2 (Spark) — Top 10:**
+
+| Location | M1 (MapReduce) | M2 (Spark, cluster) |
+|---|---:|---:|
+| STREET | 245,437 | 248,326 |
+| RESIDENCE | 136,238 | 136,393 |
+| APARTMENT | 60,925 | 61,235 |
+| SIDEWALK | 47,407 | 47,506 |
+| OTHER | 29,213 | 29,671 |
+| PARKING LOT/GARAGE(NON.RESID.) | 21,876 | 22,436 |
+| ALLEY | 18,258 | 18,349 |
+| SCHOOL (M1: SCHOOL / M2: SCHOOL, PUBLIC, BUILDING) | 20,516 | 15,776 |
+| RESIDENCE-GARAGE | 14,266 | 14,291 |
+| SMALL RETAIL STORE | 13,755 | 13,804 |
+
+Slight differences come from M1 using a custom `IndexError`-skipping CSV split that dropped a few hundred edge-case rows; Spark's robust CSV parser keeps them. Spark SQL with `spark.sql()` is more concise than writing a mapper that splits CSV by hand.
 
 ---
 
@@ -76,6 +139,15 @@ Sample row trace: `Primary Type=NARCOTICS → crime_index=3.0`, vector `[Distric
 
 **Best by AUC: Random Forest (0.8796).**
 
+**Cluster results (full 793K rows, from `cluster_yarn_log.txt` — added by haifafr in next PR):**
+
+| Model | Train (s) | AUC | Accuracy | F1 |
+|:--|---:|---:|---:|---:|
+| Logistic Regression | 33.2 | 0.6167 | 0.7249 | 0.6293 |
+| Random Forest | 156.3 | **0.8101** | **0.8142** | **0.7786** |
+
+Random Forest on the full 793K-row dataset confirms it as the production-ready model (AUC 0.81 on 158,677 held-out rows).
+
 ## Task 7 — Feature Importances + Interpretation
 **Author:** Haifa Binhethlen (231265, `haifabh`)
 
@@ -101,6 +173,41 @@ Grid: `numTrees ∈ {50, 100, 200}` × `maxDepth ∈ {3, 5, 10}` = 9 combos × 3
 **Best model AUC on held-out test set: 0.8797**
 
 CV runtime locally: 371.8 s.
+
+---
+
+# Phase C — Deployment Evidence
+
+## Task 11 — spark-submit
+**Author:** Sarah Alomar (231283, `smalomar`)
+
+Standalone Phase B script (`m2_spark_ml.py`) submitted to YARN:
+
+```bash
+smalomar@master-node:~$ spark-submit --master yarn --deploy-mode client \
+    --num-executors 2 --executor-memory 1g --executor-cores 1 --driver-memory 1g \
+    m2_spark_ml.py
+```
+
+Excerpt from `output/spark_submit_log.txt`:
+
+```
+Spark version: 3.5.4
+Master: yarn
+Loaded 793,072 rows
+Train: 634,395  Test: 158,677
+
+=== LogisticRegression ===
+  AUC        0.6167
+  Accuracy   0.7249
+  F1         0.6293
+  Precision  0.6894
+  Recall     0.7249
+  Train time: 39.4s
+  Confusion (TN,FP,FN,TP): (112832, 1525, 42130, 2189)
+```
+
+Application ID: `application_1771402826595_0346`. Full log: [`output/spark_submit_log.txt`](output/spark_submit_log.txt).
 
 ---
 
